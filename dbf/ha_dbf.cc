@@ -86,7 +86,7 @@
   ha_dbf::open() would also have been necessary. Calls to
   ha_dbf::extra() are hints as to what will be occuring to the request.
 
-  A Longer Dbf can be found called the "Skeleton Engine" which can be 
+  A Longer Dbf can be found called the "Skeleton Engine" which can be
   found on TangentOrg. It has both an engine and a full build environment
   for building a pluggable storage engine.
 
@@ -94,43 +94,45 @@
     -Brian
 */
 
-#include "sql_class.h"           // MYSQL_HANDLERTON_INTERFACE_VERSION
+#include "sql_class.h" // MYSQL_HANDLERTON_INTERFACE_VERSION
 #include "ha_dbf.h"
 #include "probes_mysql.h"
 #include "sql_plugin.h"
+#include "mysql_file.h"
+
+#define DBE_EXT ".dbe" // data file extension
+#define DBI_EXT ".dbi" // index file extension
 
 static handler *dbf_create_handler(handlerton *hton,
-                                       TABLE_SHARE *table, 
-                                       MEM_ROOT *mem_root);
+                                   TABLE_SHARE *table,
+                                   MEM_ROOT *mem_root);
 
 handlerton *dbf_hton;
 
 /* Interface to mysqld, to check system tables supported by SE */
-static const char* dbf_system_database();
+static const char *dbf_system_database();
 static bool dbf_is_supported_system_table(const char *db,
-                                      const char *table_name,
-                                      bool is_sql_layer_system_table);
+                                          const char *table_name,
+                                          bool is_sql_layer_system_table);
 
 Dbf_share::Dbf_share()
 {
   thr_lock_init(&lock);
 }
 
-
 static int dbf_init_func(void *p)
 {
   DBUG_ENTER("dbf_init_func");
 
-  dbf_hton= (handlerton *)p;
-  dbf_hton->state=                     SHOW_OPTION_YES;
-  dbf_hton->create=                    dbf_create_handler;
-  dbf_hton->flags=                     HTON_CAN_RECREATE;
-  dbf_hton->system_database=   dbf_system_database;
-  dbf_hton->is_supported_system_table= dbf_is_supported_system_table;
+  dbf_hton = (handlerton *)p;
+  dbf_hton->state = SHOW_OPTION_YES;
+  dbf_hton->create = dbf_create_handler;
+  dbf_hton->flags = HTON_CAN_RECREATE;
+  dbf_hton->system_database = dbf_system_database;
+  dbf_hton->is_supported_system_table = dbf_is_supported_system_table;
 
   DBUG_RETURN(0);
 }
-
 
 /**
   @brief
@@ -147,31 +149,29 @@ Dbf_share *ha_dbf::get_share()
   DBUG_ENTER("ha_dbf::get_share()");
 
   lock_shared_ha_data();
-  if (!(tmp_share= static_cast<Dbf_share*>(get_ha_share_ptr())))
+  if (!(tmp_share = static_cast<Dbf_share *>(get_ha_share_ptr())))
   {
-    tmp_share= new Dbf_share;
+    tmp_share = new Dbf_share;
     if (!tmp_share)
       goto err;
-
-    set_ha_share_ptr(static_cast<Handler_share*>(tmp_share));
+    set_ha_share_ptr(static_cast<Handler_share *>(tmp_share));
   }
 err:
   unlock_shared_ha_data();
   DBUG_RETURN(tmp_share);
 }
 
-
-static handler* dbf_create_handler(handlerton *hton,
-                                       TABLE_SHARE *table, 
-                                       MEM_ROOT *mem_root)
+static handler *dbf_create_handler(handlerton *hton,
+                                   TABLE_SHARE *table,
+                                   MEM_ROOT *mem_root)
 {
   return new (mem_root) ha_dbf(hton, table);
 }
 
 ha_dbf::ha_dbf(handlerton *hton, TABLE_SHARE *table_arg)
-  :handler(hton, table_arg)
-{}
-
+    : handler(hton, table_arg)
+{
+}
 
 /**
   @brief
@@ -188,12 +188,13 @@ ha_dbf::ha_dbf(handlerton *hton, TABLE_SHARE *table_arg)
 
   @see
   rename_table method in handler.cc and
-  delete_table method in handler.cc
+  delete_table method in handler.ccs
 */
 
 static const char *ha_dbf_exts[] = {
-  NullS
-};
+    DBE_EXT,
+    DBI_EXT,
+    NullS};
 
 const char **ha_dbf::bas_ext() const
 {
@@ -205,8 +206,8 @@ const char **ha_dbf::bas_ext() const
   system database specific to SE. This interface
   is optional, so every SE need not implement it.
 */
-const char* ha_dbf_system_database= NULL;
-const char* dbf_system_database()
+const char *ha_dbf_system_database = NULL;
+const char *dbf_system_database()
 {
   return ha_dbf_system_database;
 }
@@ -220,9 +221,8 @@ const char* dbf_system_database()
 
   This array is optional, so every SE need not implement it.
 */
-static st_handler_tablename ha_dbf_system_tables[]= {
-  {(const char*)NULL, (const char*)NULL}
-};
+static st_handler_tablename ha_dbf_system_tables[] = {
+    {(const char *)NULL, (const char *)NULL}};
 
 /**
   @brief Check if the given db.tablename is a system table for this SE.
@@ -237,8 +237,8 @@ static st_handler_tablename ha_dbf_system_tables[]= {
     @retval FALSE  Given db.table_name is not a supported system table.
 */
 static bool dbf_is_supported_system_table(const char *db,
-                                              const char *table_name,
-                                              bool is_sql_layer_system_table)
+                                          const char *table_name,
+                                          bool is_sql_layer_system_table)
 {
   st_handler_tablename *systab;
 
@@ -247,7 +247,7 @@ static bool dbf_is_supported_system_table(const char *db,
     return false;
 
   // Check if this is SE layer system tables
-  systab= ha_dbf_system_tables;
+  systab = ha_dbf_system_tables;
   while (systab && systab->db)
   {
     if (systab->db == db &&
@@ -258,7 +258,6 @@ static bool dbf_is_supported_system_table(const char *db,
 
   return false;
 }
-
 
 /**
   @brief
@@ -276,17 +275,25 @@ static bool dbf_is_supported_system_table(const char *db,
   handler::ha_open() in handler.cc
 */
 
+
 int ha_dbf::open(const char *name, int mode, uint test_if_locked)
 {
   DBUG_ENTER("ha_dbf::open");
-
   if (!(share = get_share()))
     DBUG_RETURN(1);
-  thr_lock_data_init(&share->lock,&lock,NULL);
+  my_stpcpy(share->table_name, name);
+  fn_format(share->data_file_name, name, "", DBE_EXT,
+              MY_REPLACE_EXT|MY_UNPACK_FILENAME);
+  
+  if ((data_file= my_open(share->data_file_name,O_RDONLY, MYF(MY_WME))) == -1)
+  {
+    DBUG_RETURN(my_errno() ? my_errno() : -1);
+  }
 
+  thr_lock_data_init(&share->lock, &lock, NULL);
+  
   DBUG_RETURN(0);
 }
-
 
 /**
   @brief
@@ -308,7 +315,6 @@ int ha_dbf::close(void)
   DBUG_ENTER("ha_dbf::close");
   DBUG_RETURN(0);
 }
-
 
 /**
   @brief
@@ -352,7 +358,6 @@ int ha_dbf::write_row(uchar *buf)
   DBUG_RETURN(0);
 }
 
-
 /**
   @brief
   Yes, update_row() does what you expect, it updates a row. old_data will have
@@ -383,7 +388,6 @@ int ha_dbf::update_row(const uchar *old_data, uchar *new_data)
   DBUG_RETURN(HA_ERR_WRONG_COMMAND);
 }
 
-
 /**
   @brief
   This will delete a row. buf will contain a copy of the row to be deleted.
@@ -410,7 +414,6 @@ int ha_dbf::delete_row(const uchar *buf)
   DBUG_RETURN(HA_ERR_WRONG_COMMAND);
 }
 
-
 /**
   @brief
   Positions an index cursor to the index specified in the handle. Fetches the
@@ -419,18 +422,17 @@ int ha_dbf::delete_row(const uchar *buf)
 */
 
 int ha_dbf::index_read_map(uchar *buf, const uchar *key,
-                               key_part_map keypart_map MY_ATTRIBUTE((unused)),
-                               enum ha_rkey_function find_flag
+                           key_part_map keypart_map MY_ATTRIBUTE((unused)),
+                           enum ha_rkey_function find_flag
                                MY_ATTRIBUTE((unused)))
 {
   int rc;
   DBUG_ENTER("ha_dbf::index_read");
   MYSQL_INDEX_READ_ROW_START(table_share->db.str, table_share->table_name.str);
-  rc= HA_ERR_WRONG_COMMAND;
+  rc = HA_ERR_WRONG_COMMAND;
   MYSQL_INDEX_READ_ROW_DONE(rc);
   DBUG_RETURN(rc);
 }
-
 
 /**
   @brief
@@ -442,11 +444,10 @@ int ha_dbf::index_next(uchar *buf)
   int rc;
   DBUG_ENTER("ha_dbf::index_next");
   MYSQL_INDEX_READ_ROW_START(table_share->db.str, table_share->table_name.str);
-  rc= HA_ERR_WRONG_COMMAND;
+  rc = HA_ERR_WRONG_COMMAND;
   MYSQL_INDEX_READ_ROW_DONE(rc);
   DBUG_RETURN(rc);
 }
-
 
 /**
   @brief
@@ -458,11 +459,10 @@ int ha_dbf::index_prev(uchar *buf)
   int rc;
   DBUG_ENTER("ha_dbf::index_prev");
   MYSQL_INDEX_READ_ROW_START(table_share->db.str, table_share->table_name.str);
-  rc= HA_ERR_WRONG_COMMAND;
+  rc = HA_ERR_WRONG_COMMAND;
   MYSQL_INDEX_READ_ROW_DONE(rc);
   DBUG_RETURN(rc);
 }
-
 
 /**
   @brief
@@ -479,11 +479,10 @@ int ha_dbf::index_first(uchar *buf)
   int rc;
   DBUG_ENTER("ha_dbf::index_first");
   MYSQL_INDEX_READ_ROW_START(table_share->db.str, table_share->table_name.str);
-  rc= HA_ERR_WRONG_COMMAND;
+  rc = HA_ERR_WRONG_COMMAND;
   MYSQL_INDEX_READ_ROW_DONE(rc);
   DBUG_RETURN(rc);
 }
-
 
 /**
   @brief
@@ -500,11 +499,10 @@ int ha_dbf::index_last(uchar *buf)
   int rc;
   DBUG_ENTER("ha_dbf::index_last");
   MYSQL_INDEX_READ_ROW_START(table_share->db.str, table_share->table_name.str);
-  rc= HA_ERR_WRONG_COMMAND;
+  rc = HA_ERR_WRONG_COMMAND;
   MYSQL_INDEX_READ_ROW_DONE(rc);
   DBUG_RETURN(rc);
 }
-
 
 /**
   @brief
@@ -531,7 +529,6 @@ int ha_dbf::rnd_end()
   DBUG_RETURN(0);
 }
 
-
 /**
   @brief
   This is called for each row of the table scan. When you run out of records
@@ -552,11 +549,10 @@ int ha_dbf::rnd_next(uchar *buf)
   DBUG_ENTER("ha_dbf::rnd_next");
   MYSQL_READ_ROW_START(table_share->db.str, table_share->table_name.str,
                        TRUE);
-  rc= HA_ERR_END_OF_FILE;
+  rc = HA_ERR_END_OF_FILE;
   MYSQL_READ_ROW_DONE(rc);
   DBUG_RETURN(rc);
 }
-
 
 /**
   @brief
@@ -585,7 +581,6 @@ void ha_dbf::position(const uchar *record)
   DBUG_VOID_RETURN;
 }
 
-
 /**
   @brief
   This is like rnd_next, but you are given a position to use
@@ -605,11 +600,10 @@ int ha_dbf::rnd_pos(uchar *buf, uchar *pos)
   DBUG_ENTER("ha_dbf::rnd_pos");
   MYSQL_READ_ROW_START(table_share->db.str, table_share->table_name.str,
                        TRUE);
-  rc= HA_ERR_WRONG_COMMAND;
+  rc = HA_ERR_WRONG_COMMAND;
   MYSQL_READ_ROW_DONE(rc);
   DBUG_RETURN(rc);
 }
-
 
 /**
   @brief
@@ -655,7 +649,6 @@ int ha_dbf::info(uint flag)
   DBUG_RETURN(0);
 }
 
-
 /**
   @brief
   extra() is called whenever the server wishes to send a hint to
@@ -670,7 +663,6 @@ int ha_dbf::extra(enum ha_extra_function operation)
   DBUG_ENTER("ha_dbf::extra");
   DBUG_RETURN(0);
 }
-
 
 /**
   @brief
@@ -697,7 +689,6 @@ int ha_dbf::delete_all_rows()
   DBUG_RETURN(HA_ERR_WRONG_COMMAND);
 }
 
-
 /**
   @brief
   Used for handler specific truncate table.  The table is locked in
@@ -719,7 +710,6 @@ int ha_dbf::truncate()
   DBUG_ENTER("ha_dbf::truncate");
   DBUG_RETURN(HA_ERR_WRONG_COMMAND);
 }
-
 
 /**
   @brief
@@ -743,7 +733,6 @@ int ha_dbf::external_lock(THD *thd, int lock_type)
   DBUG_ENTER("ha_dbf::external_lock");
   DBUG_RETURN(0);
 }
-
 
 /**
   @brief
@@ -783,15 +772,14 @@ int ha_dbf::external_lock(THD *thd, int lock_type)
   get_lock_data() in lock.cc
 */
 THR_LOCK_DATA **ha_dbf::store_lock(THD *thd,
-                                       THR_LOCK_DATA **to,
-                                       enum thr_lock_type lock_type)
+                                   THR_LOCK_DATA **to,
+                                   enum thr_lock_type lock_type)
 {
   if (lock_type != TL_IGNORE && lock.type == TL_UNLOCK)
-    lock.type=lock_type;
-  *to++= &lock;
+    lock.type = lock_type;
+  *to++ = &lock;
   return to;
 }
-
 
 /**
   @brief
@@ -819,7 +807,6 @@ int ha_dbf::delete_table(const char *name)
   DBUG_RETURN(0);
 }
 
-
 /**
   @brief
   Renames a table from one name to another via an alter table call.
@@ -834,12 +821,11 @@ int ha_dbf::delete_table(const char *name)
   @see
   mysql_rename_table() in sql_table.cc
 */
-int ha_dbf::rename_table(const char * from, const char * to)
+int ha_dbf::rename_table(const char *from, const char *to)
 {
   DBUG_ENTER("ha_dbf::rename_table ");
   DBUG_RETURN(HA_ERR_WRONG_COMMAND);
 }
-
 
 /**
   @brief
@@ -855,12 +841,11 @@ int ha_dbf::rename_table(const char * from, const char * to)
   check_quick_keys() in opt_range.cc
 */
 ha_rows ha_dbf::records_in_range(uint inx, key_range *min_key,
-                                     key_range *max_key)
+                                 key_range *max_key)
 {
   DBUG_ENTER("ha_dbf::records_in_range");
-  DBUG_RETURN(10);                         // low number to force index usage
+  DBUG_RETURN(10); // low number to force index usage
 }
-
 
 /**
   @brief
@@ -882,94 +867,94 @@ ha_rows ha_dbf::records_in_range(uint inx, key_range *min_key,
 */
 
 int ha_dbf::create(const char *name, TABLE *table_arg,
-                       HA_CREATE_INFO *create_info)
+                   HA_CREATE_INFO *create_info)
 {
+  char name_buff[FN_REFLEN];
+  File create_file;
   DBUG_ENTER("ha_dbf::create");
-  /*
-    This is not implemented but we want someone to be able to see that it
-    works.
-  */
+  if ((create_file= my_create(fn_format(name_buff, name, "", DBE_EXT,
+          MY_REPLACE_EXT|MY_UNPACK_FILENAME),0,
+          O_RDWR | O_TRUNC,MYF(MY_WME))) < 0)
+    DBUG_RETURN(-1);
+  
+  my_close(create_file,MYF(0));
   DBUG_RETURN(0);
 }
 
+struct st_mysql_storage_engine dbf_storage_engine =
+    {MYSQL_HANDLERTON_INTERFACE_VERSION};
 
-struct st_mysql_storage_engine dbf_storage_engine=
-{ MYSQL_HANDLERTON_INTERFACE_VERSION };
+static ulong srv_enum_var = 0;
+static ulong srv_ulong_var = 0;
+static double srv_double_var = 0;
 
-static ulong srv_enum_var= 0;
-static ulong srv_ulong_var= 0;
-static double srv_double_var= 0;
+const char *enum_var_names[] =
+    {
+        "e1", "e2", NullS};
 
-const char *enum_var_names[]=
-{
-  "e1", "e2", NullS
-};
-
-TYPELIB enum_var_typelib=
-{
-  array_elements(enum_var_names) - 1, "enum_var_typelib",
-  enum_var_names, NULL
-};
+TYPELIB enum_var_typelib =
+    {
+        array_elements(enum_var_names) - 1, "enum_var_typelib",
+        enum_var_names, NULL};
 
 static MYSQL_SYSVAR_ENUM(
-  enum_var,                       // name
-  srv_enum_var,                   // varname
-  PLUGIN_VAR_RQCMDARG,            // opt
-  "Sample ENUM system variable.", // comment
-  NULL,                           // check
-  NULL,                           // update
-  0,                              // def
-  &enum_var_typelib);             // typelib
+    enum_var,                       // name
+    srv_enum_var,                   // varname
+    PLUGIN_VAR_RQCMDARG,            // opt
+    "Sample ENUM system variable.", // comment
+    NULL,                           // check
+    NULL,                           // update
+    0,                              // def
+    &enum_var_typelib);             // typelib
 
 static MYSQL_SYSVAR_ULONG(
-  ulong_var,
-  srv_ulong_var,
-  PLUGIN_VAR_RQCMDARG,
-  "0..1000",
-  NULL,
-  NULL,
-  8,
-  0,
-  1000,
-  0);
+    ulong_var,
+    srv_ulong_var,
+    PLUGIN_VAR_RQCMDARG,
+    "0..1000",
+    NULL,
+    NULL,
+    8,
+    0,
+    1000,
+    0);
 
 static MYSQL_SYSVAR_DOUBLE(
-  double_var,
-  srv_double_var,
-  PLUGIN_VAR_RQCMDARG,
-  "0.500000..1000.500000",
-  NULL,
-  NULL,
-  8.5,
-  0.5,
-  1000.5,
-  0);                             // reserved always 0
+    double_var,
+    srv_double_var,
+    PLUGIN_VAR_RQCMDARG,
+    "0.500000..1000.500000",
+    NULL,
+    NULL,
+    8.5,
+    0.5,
+    1000.5,
+    0); // reserved always 0
 
 static MYSQL_THDVAR_DOUBLE(
-  double_thdvar,
-  PLUGIN_VAR_RQCMDARG,
-  "0.500000..1000.500000",
-  NULL,
-  NULL,
-  8.5,
-  0.5,
-  1000.5,
-  0);
+    double_thdvar,
+    PLUGIN_VAR_RQCMDARG,
+    "0.500000..1000.500000",
+    NULL,
+    NULL,
+    8.5,
+    0.5,
+    1000.5,
+    0);
 
-static struct st_mysql_sys_var* dbf_system_variables[]= {
-  MYSQL_SYSVAR(enum_var),
-  MYSQL_SYSVAR(ulong_var),
-  MYSQL_SYSVAR(double_var),
-  MYSQL_SYSVAR(double_thdvar),
-  NULL
-};
+static struct st_mysql_sys_var *dbf_system_variables[] = {
+    MYSQL_SYSVAR(enum_var),
+    MYSQL_SYSVAR(ulong_var),
+    MYSQL_SYSVAR(double_var),
+    MYSQL_SYSVAR(double_thdvar),
+    NULL};
 
 // this is an dbf of SHOW_FUNC and of my_snprintf() service
 static int show_func_dbf(MYSQL_THD thd, struct st_mysql_show_var *var,
-                             char *buf)
+                         char *buf)
 {
-  var->type= SHOW_CHAR;
-  var->value= buf; // it's of SHOW_VAR_FUNC_BUFF_SIZE bytes
+  var->type = SHOW_CHAR;
+  var->value = buf; // it's of SHOW_VAR_FUNC_BUFF_SIZE bytes
   my_snprintf(buf, SHOW_VAR_FUNC_BUFF_SIZE,
               "enum_var is %lu, ulong_var is %lu, "
               "double_var is %f, %.6b", // %b is a MySQL extension
@@ -979,54 +964,50 @@ static int show_func_dbf(MYSQL_THD thd, struct st_mysql_show_var *var,
 
 struct dbf_vars_t
 {
-	ulong  var1;
-	double var2;
-	char   var3[64];
-  bool   var4;
-  bool   var5;
-  ulong  var6;
+  ulong var1;
+  double var2;
+  char var3[64];
+  bool var4;
+  bool var5;
+  ulong var6;
 };
 
-dbf_vars_t dbf_vars= {100, 20.01, "three hundred", true, 0, 8250};
+dbf_vars_t dbf_vars = {100, 20.01, "three hundred", true, 0, 8250};
 
-static st_mysql_show_var show_status_dbf[]=
-{
-  {"var1", (char *)&dbf_vars.var1, SHOW_LONG, SHOW_SCOPE_GLOBAL},
-  {"var2", (char *)&dbf_vars.var2, SHOW_DOUBLE, SHOW_SCOPE_GLOBAL},
-  {0,0,SHOW_UNDEF, SHOW_SCOPE_UNDEF} // null terminator required
+static st_mysql_show_var show_status_dbf[] =
+    {
+        {"var1", (char *)&dbf_vars.var1, SHOW_LONG, SHOW_SCOPE_GLOBAL},
+        {"var2", (char *)&dbf_vars.var2, SHOW_DOUBLE, SHOW_SCOPE_GLOBAL},
+        {0, 0, SHOW_UNDEF, SHOW_SCOPE_UNDEF} // null terminator required
 };
 
-static struct st_mysql_show_var show_array_dbf[]=
-{
-  {"array", (char *)show_status_dbf, SHOW_ARRAY, SHOW_SCOPE_GLOBAL},
-  {"var3", (char *)&dbf_vars.var3, SHOW_CHAR, SHOW_SCOPE_GLOBAL},
-  {"var4", (char *)&dbf_vars.var4, SHOW_BOOL, SHOW_SCOPE_GLOBAL},
-  {0,0,SHOW_UNDEF, SHOW_SCOPE_UNDEF}
-};
+static struct st_mysql_show_var show_array_dbf[] =
+    {
+        {"array", (char *)show_status_dbf, SHOW_ARRAY, SHOW_SCOPE_GLOBAL},
+        {"var3", (char *)&dbf_vars.var3, SHOW_CHAR, SHOW_SCOPE_GLOBAL},
+        {"var4", (char *)&dbf_vars.var4, SHOW_BOOL, SHOW_SCOPE_GLOBAL},
+        {0, 0, SHOW_UNDEF, SHOW_SCOPE_UNDEF}};
 
-static struct st_mysql_show_var func_status[]=
-{
-  {"dbf_func_dbf", (char *)show_func_dbf, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
-  {"dbf_status_var5", (char *)&dbf_vars.var5, SHOW_BOOL, SHOW_SCOPE_GLOBAL},
-  {"dbf_status_var6", (char *)&dbf_vars.var6, SHOW_LONG, SHOW_SCOPE_GLOBAL},
-  {"dbf_status",  (char *)show_array_dbf, SHOW_ARRAY, SHOW_SCOPE_GLOBAL},
-  {0,0,SHOW_UNDEF, SHOW_SCOPE_UNDEF}
-};
+static struct st_mysql_show_var func_status[] =
+    {
+        {"dbf_func_dbf", (char *)show_func_dbf, SHOW_FUNC, SHOW_SCOPE_GLOBAL},
+        {"dbf_status_var5", (char *)&dbf_vars.var5, SHOW_BOOL, SHOW_SCOPE_GLOBAL},
+        {"dbf_status_var6", (char *)&dbf_vars.var6, SHOW_LONG, SHOW_SCOPE_GLOBAL},
+        {"dbf_status", (char *)show_array_dbf, SHOW_ARRAY, SHOW_SCOPE_GLOBAL},
+        {0, 0, SHOW_UNDEF, SHOW_SCOPE_UNDEF}};
 
-mysql_declare_plugin(dbf)
-{
-  MYSQL_STORAGE_ENGINE_PLUGIN,
-  &dbf_storage_engine,
-  "DBF",
-  "Brian Aker, MySQL AB",
-  "Dbf storage engine",
-  PLUGIN_LICENSE_GPL,
-  dbf_init_func,                            /* Plugin Init */
-  NULL,                                         /* Plugin Deinit */
-  0x0001 /* 0.1 */,
-  func_status,                                  /* status variables */
-  dbf_system_variables,                     /* system variables */
-  NULL,                                         /* config options */
-  0,                                            /* flags */
-}
-mysql_declare_plugin_end;
+mysql_declare_plugin(dbf){
+    MYSQL_STORAGE_ENGINE_PLUGIN,
+    &dbf_storage_engine,
+    "DBF",
+    "Brian Aker, MySQL AB",
+    "Dbf storage engine",
+    PLUGIN_LICENSE_GPL,
+    dbf_init_func, /* Plugin Init */
+    NULL,          /* Plugin Deinit */
+    0x0001 /* 0.1 */,
+    func_status,          /* status variables */
+    dbf_system_variables, /* system variables */
+    NULL,                 /* config options */
+    0,                    /* flags */
+} mysql_declare_plugin_end;
