@@ -98,7 +98,7 @@
 #include "ha_dbf.h"
 #include "probes_mysql.h"
 #include "sql_plugin.h"
-#include "mysql_file.h"
+#include <mysql/psi/mysql_file.h>
 
 #define DBE_EXT ".dbe" // data file extension
 #define DBI_EXT ".dbi" // index file extension
