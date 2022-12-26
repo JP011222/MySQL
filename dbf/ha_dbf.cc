@@ -130,7 +130,7 @@ static int dbf_init_func(void *p)
   dbf_hton->flags = HTON_CAN_RECREATE;
   dbf_hton->system_database = dbf_system_database;
   dbf_hton->is_supported_system_table = dbf_is_supported_system_table;
-
+  
   DBUG_RETURN(0);
 }
 
@@ -169,7 +169,12 @@ static handler *dbf_create_handler(handlerton *hton,
 }
 
 ha_dbf::ha_dbf(handlerton *hton, TABLE_SHARE *table_arg)
-    : handler(hton, table_arg)
+    : handler(hton, table_arg),
+      current_position(0), 
+      next_position(0),
+      chain_alloced(0), 
+      chain_size(512),
+      local_data_file_version(0)
 {
 }
 
@@ -279,11 +284,13 @@ static bool dbf_is_supported_system_table(const char *db,
 int ha_dbf::open(const char *name, int mode, uint test_if_locked)
 {
   DBUG_ENTER("ha_dbf::open");
+  share->crashed= FALSE;
+  share->data_file_version= 0;
+  my_stpcpy(share->table_name, name); 
+  fn_format(share->data_file_name, name, "", DBE_EXT,
+              MY_REPLACE_EXT|MY_UNPACK_FILENAME); 
   if (!(share = get_share()))
     DBUG_RETURN(1);
-  my_stpcpy(share->table_name, name);
-  fn_format(share->data_file_name, name, "", DBE_EXT,
-              MY_REPLACE_EXT|MY_UNPACK_FILENAME);
   
   if ((data_file= my_open(share->data_file_name,O_RDONLY, MYF(MY_WME))) == -1)
   {
@@ -313,7 +320,9 @@ int ha_dbf::open(const char *name, int mode, uint test_if_locked)
 int ha_dbf::close(void)
 {
   DBUG_ENTER("ha_dbf::close");
-  DBUG_RETURN(0);
+  int fc = my_close(data_file, MYF(0));
+  my_free(share);
+  DBUG_RETURN(fc);
 }
 
 /**
@@ -355,6 +364,11 @@ int ha_dbf::write_row(uchar *buf)
     probably need to do something with 'buf'. We report a success
     here, to pretend that the insert was successful.
   */
+  lock_shared_ha_data();
+  ha_statistic_increment(&SSV::ha_write_count);
+  my_write(data_file, buf, table->s->rec_buff_length, MYF(0));
+  stats.records++;
+  unlock_shared_ha_data();
   DBUG_RETURN(0);
 }
 
@@ -520,6 +534,8 @@ int ha_dbf::index_last(uchar *buf)
 int ha_dbf::rnd_init(bool scan)
 {
   DBUG_ENTER("ha_dbf::rnd_init");
+  current_position= next_position= 0;
+  stats.records= 0;
   DBUG_RETURN(0);
 }
 
@@ -549,7 +565,24 @@ int ha_dbf::rnd_next(uchar *buf)
   DBUG_ENTER("ha_dbf::rnd_next");
   MYSQL_READ_ROW_START(table_share->db.str, table_share->table_name.str,
                        TRUE);
-  rc = HA_ERR_END_OF_FILE;
+  ha_statistic_increment(&SSV::ha_read_rnd_next_count);
+  if (current_position >= table->s->reclength)
+  {
+    rc = HA_ERR_END_OF_FILE;
+  }
+  else
+  {
+    my_off_t pos = my_seek(data_file,0L, MY_SEEK_SET, MYF(0));
+    if(pos < table->s->reclength){
+      rc=my_read(data_file, buf, table->s->reclength, MYF(0));
+      if(rc!=-1){
+        current_position = pos;
+      }
+    }
+    else{
+      rc = HA_ERR_END_OF_FILE;
+    }
+  }
   MYSQL_READ_ROW_DONE(rc);
   DBUG_RETURN(rc);
 }
@@ -578,6 +611,7 @@ int ha_dbf::rnd_next(uchar *buf)
 void ha_dbf::position(const uchar *record)
 {
   DBUG_ENTER("ha_dbf::position");
+  my_store_ptr(ref, ref_length, current_position);
   DBUG_VOID_RETURN;
 }
 
@@ -600,7 +634,15 @@ int ha_dbf::rnd_pos(uchar *buf, uchar *pos)
   DBUG_ENTER("ha_dbf::rnd_pos");
   MYSQL_READ_ROW_START(table_share->db.str, table_share->table_name.str,
                        TRUE);
-  rc = HA_ERR_WRONG_COMMAND;
+  ha_statistic_increment(&SSV::ha_read_rnd_count);
+  current_position= my_get_ptr(pos,ref_length);
+  my_off_t p = my_seek(data_file,0L, MY_SEEK_SET, MYF(0));
+  if(p < table->s->reclength){
+    rc=my_read(data_file, buf, table->s->reclength, MYF(0));
+  }
+  else{
+    rc = HA_ERR_END_OF_FILE;
+  }
   MYSQL_READ_ROW_DONE(rc);
   DBUG_RETURN(rc);
 }
@@ -646,6 +688,7 @@ int ha_dbf::rnd_pos(uchar *buf, uchar *pos)
 int ha_dbf::info(uint flag)
 {
   DBUG_ENTER("ha_dbf::info");
+  if(stats.records<2) stats.records=2;
   DBUG_RETURN(0);
 }
 

@@ -52,11 +52,18 @@ public:
   char *table_name;
   char data_file_name[FN_REFLEN];
   THR_LOCK lock;
+  uint data_file_version;   /* Version of the data file used */
+  bool crashed;             /* Meta file is crashed */
   Dbf_share();
   ~Dbf_share()
   {
     thr_lock_delete(&lock);
   }
+};
+
+struct dbf_set {
+  my_off_t begin;
+  my_off_t end;
 };
 
 /** @brief
@@ -66,8 +73,22 @@ class ha_dbf: public handler
 {
   THR_LOCK_DATA lock;      ///< MySQL lock
   Dbf_share *share;    ///< Shared lock info
+  my_off_t current_position;  /* Current position in the file during a file scan */
+  my_off_t next_position;     /* Next position in the file scan */
   Dbf_share *get_share(); ///< Get the share
   File data_file; /* File handler for readers */
+
+  /*
+    The chain contains "holes" in the file, occured because of
+    deletes/updates. It is used in rnd_end() to get rid of them
+    in the end of the query.
+  */
+  dbf_set chain_buffer[512];
+  dbf_set *chain;
+  dbf_set *chain_ptr;
+  uchar chain_alloced;
+  uint32 chain_size;
+  uint local_data_file_version;  /* Saved version of the data file used */
 
 public:
   ha_dbf(handlerton *hton, TABLE_SHARE *table_arg);
