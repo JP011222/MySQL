@@ -161,16 +161,17 @@ static int dbf_init_func(void *p)
 {
   DBUG_ENTER("dbf_init_func");
   init_dbf_psi_keys();
+  mysql_mutex_init(key_mutex_dbf, &dbf_mutex, MY_MUTEX_INIT_FAST);
+  (void) my_hash_init(&dbf_open_tables,system_charset_info,32,0,0,
+                      (my_hash_get_key) dbf_get_key,0,0,
+                      key_memory_dbf_share);
+  
   dbf_hton = (handlerton *)p;
   dbf_hton->state = SHOW_OPTION_YES;
   dbf_hton->create = dbf_create_handler;
   dbf_hton->flags = HTON_CAN_RECREATE;
   dbf_hton->system_database = dbf_system_database;
   dbf_hton->is_supported_system_table = dbf_is_supported_system_table;
-  mysql_mutex_init(key_mutex_dbf, &dbf_mutex, MY_MUTEX_INIT_FAST);
-  (void) my_hash_init(&dbf_open_tables,system_charset_info,32,0,0,
-                      (my_hash_get_key) dbf_get_key,0,0,
-                      key_memory_dbf_share);
   DBUG_RETURN(0);
 }
 
@@ -209,8 +210,8 @@ static Dbf_share *get_share(const char *table_name, TABLE *table)
     }
     tmp_share->use_count=0;
     tmp_share->table_name_length = length;
-    // tmp_share->table_name=tmp_name;
-    // strcpy(tmp_share->table_name, table_name);  
+    tmp_share->table_name=tmp_name;
+    strcpy(tmp_share->table_name, table_name);  
     if (my_hash_insert(&dbf_open_tables, (uchar*) tmp_share))
       goto err;
     thr_lock_init(&tmp_share->lock);
@@ -222,7 +223,8 @@ static Dbf_share *get_share(const char *table_name, TABLE *table)
   DBUG_RETURN(tmp_share);
 err:
   mysql_mutex_unlock(&dbf_mutex);
-  my_free(tmp_share);
+  if(tmp_share)
+    my_free(tmp_share);
   DBUG_RETURN(NULL);
 }
 
@@ -259,7 +261,7 @@ int ha_dbf::read_header(){
   int len;
   DBUG_ENTER("ha_dbf::read_header");
   if(number_records==-1){
-    my_seek(data_file,0l,MY_SEEK_SET,MYF(0));
+    my_seek(data_file,0L,MY_SEEK_SET,MYF(0));
     my_read(data_file,(uchar*)&crashed,sizeof(bool),MYF(0));
     my_read(data_file,(uchar*)&len,sizeof(int),MYF(0));
     memcpy(&number_records,&len,sizeof(int));
@@ -274,7 +276,7 @@ int ha_dbf::read_header(){
 long long ha_dbf::cur_position(){
   long long pos;
   DBUG_ENTER("ha_dbf::cur_position");
-  pos = my_seek(data_file,0l,MY_SEEK_CUR,MYF(0));
+  pos = my_seek(data_file,0L,MY_SEEK_CUR,MYF(0));
   if(pos==0){
     DBUG_RETURN(header_size);
   }
@@ -445,9 +447,7 @@ int ha_dbf::open(const char *name, int mode, uint test_if_locked)
 int ha_dbf::close(void)
 {
   DBUG_ENTER("ha_dbf::close");
-  int fc = my_close(data_file, MYF(0));
-  my_free(share);
-  DBUG_RETURN(fc);
+  DBUG_RETURN(0);
 }
 
 /**
