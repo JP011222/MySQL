@@ -103,6 +103,10 @@
 #define DBE_EXT ".dbe" // data file extension
 #define DBI_EXT ".dbi" // index file extension
 
+static PSI_memory_key csv_key_memory_dbf_share;
+
+pthread_mutex_t dbf_mutex;
+static HASH dbf_open_tables;
 static handler *dbf_create_handler(handlerton *hton,
                                    TABLE_SHARE *table,
                                    MEM_ROOT *mem_root);
@@ -142,23 +146,48 @@ static int dbf_init_func(void *p)
   they are needed to function.
 */
 
-Dbf_share *ha_dbf::get_share()
+Dbf_share *ha_dbf::get_share(const char *table_name, TABLE *table)
 {
-  Dbf_share *tmp_share;
-
   DBUG_ENTER("ha_dbf::get_share()");
+  Dbf_share *tmp_share;
+  char *tmp_name;
+  uint length;
 
-  lock_shared_ha_data();
-  if (!(tmp_share = static_cast<Dbf_share *>(get_ha_share_ptr())))
+  pthread_mutex_lock(&dbf_mutex);
+  length=(uint) strlen(table_name);
+
+  /*
+    If share is not present in the hash, create a new share and
+    initialize its members.
+  */
+  if (!(tmp_share=(Dbf_share*) my_hash_search(&dbf_open_tables,
+                                           (uchar*) table_name,
+                                           length)))
   {
-    tmp_share = new Dbf_share;
-    if (!tmp_share)
+    if (!my_multi_malloc(csv_key_memory_dbf_share,
+                         MYF(MY_WME | MY_ZEROFILL),
+                         &tmp_share, sizeof(*tmp_share),
+                         &tmp_name, length+1,
+                         NullS))
+    {
+      pthread_mutex_unlock(&dbf_mutex);
+      return NULL;
+    }
+    tmp_share->use_count=0;
+    tmp_share->table_name_length = length;
+    strcpy(tmp_share->table_name, table_name);  
+    if (my_hash_insert(&dbf_open_tables, (uchar*) tmp_share))
       goto err;
-    set_ha_share_ptr(static_cast<Handler_share *>(tmp_share));
+    thr_lock_init(&tmp_share->lock);
+    pthread_mutex_init(&tmp_share->mutex,MY_MUTEX_INIT_FAST);
   }
+  tmp_share->use_count++;
+  pthread_mutex_unlock(&dbf_mutex);
+  return tmp_share;
 err:
-  unlock_shared_ha_data();
-  DBUG_RETURN(tmp_share);
+  pthread_mutex_destroy(&tmp_share->mutex);
+  my_free(tmp_share);
+  return NULL;
 }
 
 static handler *dbf_create_handler(handlerton *hton,
@@ -171,11 +200,72 @@ static handler *dbf_create_handler(handlerton *hton,
 ha_dbf::ha_dbf(handlerton *hton, TABLE_SHARE *table_arg)
     : handler(hton, table_arg),
       current_position(0), 
-      next_position(0),
-      chain_alloced(0), 
-      chain_size(512),
-      local_data_file_version(0)
+      data_file(-1),
+      number_records(-1),
+      number_del_records(-1),
+      header_size(sizeof(bool)+sizeof(int)+sizeof(int)),
+      record_header_size(sizeof(uchar)+sizeof(int))
 {
+}
+
+int ha_dbf::write_header(){
+  DBUG_ENTER("ha_dbf::write_header");
+  if(number_records!=-1){
+    my_seek(data_file,0l,MY_SEEK_SET,MYF(0));
+    my_write(data_file,(uchar*)&crashed,sizeof(bool),MYF(0));
+    my_write(data_file,(uchar*)&number_records,sizeof(int),MYF(0));
+    my_write(data_file,(uchar*)&number_del_records,sizeof(int),MYF(0));
+  }
+  DBUG_RETURN(0);
+}
+
+int ha_dbf::read_header(){
+  int len;
+  DBUG_ENTER("ha_dbf::read_header");
+  if(number_records==-1){
+    my_seek(data_file,0l,MY_SEEK_SET,MYF(0));
+    my_read(data_file,(uchar*)&crashed,sizeof(bool),MYF(0));
+    my_read(data_file,(uchar*)&len,sizeof(int),MYF(0));
+    memcpy(&number_records,&len,sizeof(int));
+    my_read(data_file,(uchar*)&len,sizeof(int),MYF(0));
+    memcpy(&number_del_records,&len,sizeof(int));
+  }else{
+    my_seek(data_file,header_size,MY_SEEK_SET,MYF(0));
+  }
+  DBUG_RETURN(0);
+}
+
+long long ha_dbf::cur_position(){
+  long long pos;
+  DBUG_ENTER("ha_dbf::cur_position");
+  pos = my_seek(data_file,0l,MY_SEEK_CUR,MYF(0));
+  if(pos==0){
+    DBUG_RETURN(header_size);
+  }
+  DBUG_RETURN(pos);
+}
+
+int ha_dbf::readrow(uchar *buf,int length,long long position){
+  int i;
+  int rec_len;
+  long long pos;
+  uchar deleted = 2;
+  DBUG_ENTER("ha_dbf::read_row");
+  if(position<=0) position = header_size;
+  pos = my_seek(data_file, position, MY_SEEK_SET, MYF(0));
+  if(pos != -1l ){
+    i = my_read(data_file, &deleted, sizeof(uchar), MYF(0));
+    if(deleted == 0){
+      i = my_read(data_file,(uchar*)&rec_len,sizeof(int),MYF(0));
+      i = my_read(data_file, buf , (length < rec_len)?length:rec_len, MYF(0));
+    }else if (i == 0){
+      DBUG_RETURN(-1);
+    }else {
+      int rt = readrow(buf,length,cur_position()+length+(record_header_size-sizeof(uchar)));
+      DBUG_RETURN(rt);
+    }
+  }else DBUG_RETURN(-1);
+  DBUG_RETURN(0);
 }
 
 /**
@@ -284,17 +374,16 @@ static bool dbf_is_supported_system_table(const char *db,
 int ha_dbf::open(const char *name, int mode, uint test_if_locked)
 {
   DBUG_ENTER("ha_dbf::open");
-  share->crashed= FALSE;
-  share->data_file_version= 0;
-  my_stpcpy(share->table_name, name); 
-  fn_format(share->data_file_name, name, "", DBE_EXT,
-              MY_REPLACE_EXT|MY_UNPACK_FILENAME); 
-  if (!(share = get_share()))
+  char name_buff[FN_REFLEN];
+  if(!(share = get_share(name,table)))
     DBUG_RETURN(1);
-  
-  if ((data_file= my_open(share->data_file_name,O_RDONLY, MYF(MY_WME))) == -1)
-  {
-    DBUG_RETURN(my_errno() ? my_errno() : -1);
+  char *path = fn_format(name_buff,name,"",DBE_EXT,MY_REPLACE_EXT|MY_UNPACK_FILENAME);
+  data_file = my_open(path, O_RDWR | O_CREAT | O_BINARY | O_SHARE, MYF(0));
+  int flag = 0;
+  if (data_file == -1)
+    flag = 1;
+  if(!flag){
+    read_header();
   }
 
   thr_lock_data_init(&share->lock, &lock, NULL);
@@ -364,11 +453,23 @@ int ha_dbf::write_row(uchar *buf)
     probably need to do something with 'buf'. We report a success
     here, to pretend that the insert was successful.
   */
-  lock_shared_ha_data();
   ha_statistic_increment(&SSV::ha_write_count);
-  my_write(data_file, buf, table->s->rec_buff_length, MYF(0));
-  stats.records++;
-  unlock_shared_ha_data();
+  pthread_mutex_lock(&dbf_mutex);
+  // buf , table->s->rec_buff_length
+  int length = table->s->rec_buff_length;
+  long long pos;
+  int i;
+  int len;
+  uchar deleted = 0;
+  pos = my_seek(data_file, 0L, MY_SEEK_END, MYF(0));
+  i = my_write(data_file, &deleted, sizeof(uchar), MYF(0));
+  memcpy(&len,&length,sizeof(int));
+  i = my_write(data_file, (uchar*)&len,sizeof(int),MYF(0));
+  i = my_write(data_file, buf, length, MYF(0));
+  if(i==-1) pos = i;
+  else number_records++;
+  if(pos){}
+  pthread_mutex_unlock(&dbf_mutex);
   DBUG_RETURN(0);
 }
 
@@ -534,8 +635,9 @@ int ha_dbf::index_last(uchar *buf)
 int ha_dbf::rnd_init(bool scan)
 {
   DBUG_ENTER("ha_dbf::rnd_init");
-  current_position= next_position= 0;
+  current_position=0;
   stats.records= 0;
+  ref_length = sizeof(long long);
   DBUG_RETURN(0);
 }
 
@@ -561,30 +663,15 @@ int ha_dbf::rnd_end()
 */
 int ha_dbf::rnd_next(uchar *buf)
 {
-  int rc;
+  int rc=-1;
   DBUG_ENTER("ha_dbf::rnd_next");
-  MYSQL_READ_ROW_START(table_share->db.str, table_share->table_name.str,
-                       TRUE);
   ha_statistic_increment(&SSV::ha_read_rnd_next_count);
-  if (current_position >= table->s->reclength)
-  {
-    rc = HA_ERR_END_OF_FILE;
-  }
-  else
-  {
-    my_off_t pos = my_seek(data_file,0L, MY_SEEK_SET, MYF(0));
-    if(pos < table->s->reclength){
-      rc=my_read(data_file, buf, table->s->reclength, MYF(0));
-      if(rc!=-1){
-        current_position = pos;
-      }
-    }
-    else{
-      rc = HA_ERR_END_OF_FILE;
-    }
-  }
-  MYSQL_READ_ROW_DONE(rc);
-  DBUG_RETURN(rc);
+  // buf table->s->rec_buff_length current_position
+  rc = readrow(buf, table->s->rec_buff_length,current_position);
+  if(rc!=-1) current_position = (off_t)cur_position();
+  else DBUG_RETURN(HA_ERR_END_OF_FILE);
+  stats.records++;
+  DBUG_RETURN(0);
 }
 
 /**
@@ -630,21 +717,12 @@ void ha_dbf::position(const uchar *record)
 */
 int ha_dbf::rnd_pos(uchar *buf, uchar *pos)
 {
-  int rc;
   DBUG_ENTER("ha_dbf::rnd_pos");
-  MYSQL_READ_ROW_START(table_share->db.str, table_share->table_name.str,
-                       TRUE);
-  ha_statistic_increment(&SSV::ha_read_rnd_count);
-  current_position= my_get_ptr(pos,ref_length);
-  my_off_t p = my_seek(data_file,0L, MY_SEEK_SET, MYF(0));
-  if(p < table->s->reclength){
-    rc=my_read(data_file, buf, table->s->reclength, MYF(0));
-  }
-  else{
-    rc = HA_ERR_END_OF_FILE;
-  }
-  MYSQL_READ_ROW_DONE(rc);
-  DBUG_RETURN(rc);
+  ha_statistic_increment(&SSV::ha_read_rnd_next_count);
+  current_position= (off_t)my_get_ptr(pos,ref_length);
+  //buf , current_position , -1
+  readrow(buf, current_position, -1);
+  DBUG_RETURN(0);
 }
 
 /**
@@ -847,6 +925,17 @@ int ha_dbf::delete_table(const char *name)
 {
   DBUG_ENTER("ha_dbf::delete_table");
   /* This is not implemented but we want someone to be able that it works. */
+  char name_buff[FN_REFLEN];
+  pthread_mutex_lock(&dbf_mutex);
+  if(!(share=get_share(name,table)))
+    DBUG_RETURN(1);
+  if(data_file!=-1){
+    my_close(data_file,MYF(0));
+    data_file=-1;
+  }
+  char*path = fn_format(name_buff, name, "", DBE_EXT, MY_REPLACE_EXT | MY_UNPACK_FILENAME);
+  my_delete(path,MYF(0));
+  pthread_mutex_unlock(&dbf_mutex);
   DBUG_RETURN(0);
 }
 
@@ -867,6 +956,28 @@ int ha_dbf::delete_table(const char *name)
 int ha_dbf::rename_table(const char *from, const char *to)
 {
   DBUG_ENTER("ha_dbf::rename_table ");
+  char data_from[FN_REFLEN];
+  char data_to[FN_REFLEN];
+  if(!(share=get_share(from,table)))
+    DBUG_RETURN(1);
+  pthread_mutex_lock(&dbf_mutex);
+  if(data_file!=-1){
+    my_close(data_file,MYF(0));
+    data_file=-1;
+  }
+  my_copy(fn_format(data_from, from, "", DBE_EXT, MY_REPLACE_EXT | MY_UNPACK_FILENAME),
+          fn_format(data_to, to, "", DBE_EXT, MY_REPLACE_EXT | MY_UNPACK_FILENAME),
+          MYF(0));
+  int flag = 0;
+  data_file = my_open(data_to, O_RDWR | O_CREAT | O_BINARY | O_SHARE, MYF(0));
+  if(data_file==-1){
+    flag = 1;
+  }
+  if(!flag){
+    read_header();
+  }
+  pthread_mutex_unlock(&dbf_mutex);
+  my_delete(data_from,MYF(0));
   DBUG_RETURN(HA_ERR_WRONG_COMMAND);
 }
 
@@ -913,14 +1024,24 @@ int ha_dbf::create(const char *name, TABLE *table_arg,
                    HA_CREATE_INFO *create_info)
 {
   char name_buff[FN_REFLEN];
-  File create_file;
   DBUG_ENTER("ha_dbf::create");
-  if ((create_file= my_create(fn_format(name_buff, name, "", DBE_EXT,
-          MY_REPLACE_EXT|MY_UNPACK_FILENAME),0,
-          O_RDWR | O_TRUNC,MYF(MY_WME))) < 0)
-    DBUG_RETURN(-1);
-  
-  my_close(create_file,MYF(0));
+  if(!(share=get_share(name,table)))
+    DBUG_RETURN(1);
+  char *path = fn_format(name_buff,name,"",DBE_EXT,MY_REPLACE_EXT|MY_UNPACK_FILENAME);
+  data_file = my_open(path, O_RDWR | O_CREAT | O_BINARY | O_SHARE, MYF(0));
+  int flag = 0;
+  if (data_file == -1)
+    flag = 1;
+  if(!flag) read_header();
+  number_records = 0;
+  number_del_records = 0;
+  crashed = false;
+  write_header();
+  if(flag) DBUG_RETURN(-1);
+  if(data_file!=-1){
+    my_close(data_file,MYF(0));
+    data_file = -1;
+  }
   DBUG_RETURN(0);
 }
 

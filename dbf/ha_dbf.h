@@ -50,9 +50,9 @@
 class Dbf_share : public Handler_share {
 public:
   char *table_name;
-  char data_file_name[FN_REFLEN];
+  uint table_name_length,use_count;
+  pthread_mutex_t mutex;
   THR_LOCK lock;
-  uint data_file_version;   /* Version of the data file used */
   bool crashed;             /* Meta file is crashed */
   Dbf_share();
   ~Dbf_share()
@@ -73,23 +73,18 @@ class ha_dbf: public handler
 {
   THR_LOCK_DATA lock;      ///< MySQL lock
   Dbf_share *share;    ///< Shared lock info
-  my_off_t current_position;  /* Current position in the file during a file scan */
-  my_off_t next_position;     /* Next position in the file scan */
-  Dbf_share *get_share(); ///< Get the share
+  off_t current_position;  /* Current position in the file during a file scan */
+  Dbf_share *get_share(const char *table_name, TABLE *table); ///< Get the share
   File data_file; /* File handler for readers */
-
-  /*
-    The chain contains "holes" in the file, occured because of
-    deletes/updates. It is used in rnd_end() to get rid of them
-    in the end of the query.
-  */
-  dbf_set chain_buffer[512];
-  dbf_set *chain;
-  dbf_set *chain_ptr;
-  uchar chain_alloced;
-  uint32 chain_size;
-  uint local_data_file_version;  /* Saved version of the data file used */
-
+  int number_records; /* Number of records in the file */
+  int number_del_records; /* Number of deleted records in the file */
+  int header_size; /* Size of the header */
+  int record_header_size; /* Size of the record header */
+  bool crashed; /* Meta file is crashed */
+  int write_header(); /* Write the header to the file */
+  int read_header(); /* Read the header from the file */
+  long long cur_position(); /* Get the current position in the file */
+  int readrow(uchar *buf,int length,long long position); /* Read a row from the file */
 public:
   ha_dbf(handlerton *hton, TABLE_SHARE *table_arg);
   ~ha_dbf()
@@ -105,7 +100,7 @@ public:
     The name of the index type that will be used for display.
     Don't implement this method unless you really have indexes.
    */
-  const char *index_type(uint inx) { return "BTREE"; }
+  const char *index_type(uint inx) { return "HASH"; }
 
   /** @brief
     The file extensions.
