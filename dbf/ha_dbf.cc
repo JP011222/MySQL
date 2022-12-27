@@ -103,9 +103,33 @@
 #define DBE_EXT ".dbe" // data file extension
 #define DBI_EXT ".dbi" // index file extension
 
-static PSI_memory_key csv_key_memory_dbf_share;
+mysql_mutex_t dbf_mutex;
 
-pthread_mutex_t dbf_mutex;
+static PSI_memory_key key_memory_dbf_share;
+
+static PSI_mutex_key key_mutex_dbf, key_mutex_Dbf_share_mutex;
+
+static PSI_mutex_info all_dbf_mutexes[]=
+{
+  { &key_mutex_dbf, "dbf", PSI_FLAG_GLOBAL},
+  { &key_mutex_Dbf_share_mutex, "Dbf_share::mutex", 0}
+};
+
+static PSI_memory_info all_dbf_memory[]=
+{
+  { &key_memory_dbf_share, "dbf_share", PSI_FLAG_GLOBAL}
+};
+
+static void init_dbf_psi_keys(void)
+{
+  const char* category= "dbf";
+  int count;
+  count= array_elements(all_dbf_mutexes);
+  mysql_mutex_register(category, all_dbf_mutexes, count);
+  count= array_elements(all_dbf_memory);
+  mysql_memory_register(category, all_dbf_memory, count);
+}
+
 static HASH dbf_open_tables;
 static handler *dbf_create_handler(handlerton *hton,
                                    TABLE_SHARE *table,
@@ -119,6 +143,15 @@ static bool dbf_is_supported_system_table(const char *db,
                                           const char *table_name,
                                           bool is_sql_layer_system_table);
 
+
+
+static uchar* dbf_get_key(Dbf_share *share, size_t *length,
+                          my_bool not_used MY_ATTRIBUTE((unused)))
+{
+  *length=share->table_name_length;
+  return (uchar*) share->table_name;
+}
+
 Dbf_share::Dbf_share()
 {
   thr_lock_init(&lock);
@@ -127,14 +160,17 @@ Dbf_share::Dbf_share()
 static int dbf_init_func(void *p)
 {
   DBUG_ENTER("dbf_init_func");
-
+  init_dbf_psi_keys();
   dbf_hton = (handlerton *)p;
   dbf_hton->state = SHOW_OPTION_YES;
   dbf_hton->create = dbf_create_handler;
   dbf_hton->flags = HTON_CAN_RECREATE;
   dbf_hton->system_database = dbf_system_database;
   dbf_hton->is_supported_system_table = dbf_is_supported_system_table;
-  
+  mysql_mutex_init(key_mutex_dbf, &dbf_mutex, MY_MUTEX_INIT_FAST);
+  (void) my_hash_init(&dbf_open_tables,system_charset_info,32,0,0,
+                      (my_hash_get_key) dbf_get_key,0,0,
+                      key_memory_dbf_share);
   DBUG_RETURN(0);
 }
 
@@ -146,48 +182,48 @@ static int dbf_init_func(void *p)
   they are needed to function.
 */
 
-Dbf_share *ha_dbf::get_share(const char *table_name, TABLE *table)
+static Dbf_share *get_share(const char *table_name, TABLE *table)
 {
-  DBUG_ENTER("ha_dbf::get_share()");
   Dbf_share *tmp_share;
   char *tmp_name;
   uint length;
-
-  pthread_mutex_lock(&dbf_mutex);
-  length=(uint) strlen(table_name);
-
+  length=(uint)strlen(table_name);
+  DBUG_ENTER("ha_dbf::get_share()");
+  mysql_mutex_lock(&dbf_mutex);
   /*
     If share is not present in the hash, create a new share and
     initialize its members.
   */
-  if (!(tmp_share=(Dbf_share*) my_hash_search(&dbf_open_tables,
+  if (!(tmp_share=(Dbf_share*)my_hash_search(&dbf_open_tables,
                                            (uchar*) table_name,
                                            length)))
   {
-    if (!my_multi_malloc(csv_key_memory_dbf_share,
+    if (!my_multi_malloc(key_memory_dbf_share,
                          MYF(MY_WME | MY_ZEROFILL),
                          &tmp_share, sizeof(*tmp_share),
                          &tmp_name, length+1,
                          NullS))
     {
-      pthread_mutex_unlock(&dbf_mutex);
+      mysql_mutex_unlock(&dbf_mutex);
       return NULL;
     }
     tmp_share->use_count=0;
     tmp_share->table_name_length = length;
-    strcpy(tmp_share->table_name, table_name);  
+    // tmp_share->table_name=tmp_name;
+    // strcpy(tmp_share->table_name, table_name);  
     if (my_hash_insert(&dbf_open_tables, (uchar*) tmp_share))
       goto err;
     thr_lock_init(&tmp_share->lock);
-    pthread_mutex_init(&tmp_share->mutex,MY_MUTEX_INIT_FAST);
+    mysql_mutex_init(key_mutex_Dbf_share_mutex,
+                     &tmp_share->mutex, MY_MUTEX_INIT_FAST);
   }
   tmp_share->use_count++;
-  pthread_mutex_unlock(&dbf_mutex);
-  return tmp_share;
+  mysql_mutex_unlock(&dbf_mutex);
+  DBUG_RETURN(tmp_share);
 err:
-  pthread_mutex_destroy(&tmp_share->mutex);
+  mysql_mutex_unlock(&dbf_mutex);
   my_free(tmp_share);
-  return NULL;
+  DBUG_RETURN(NULL);
 }
 
 static handler *dbf_create_handler(handlerton *hton,
@@ -454,7 +490,7 @@ int ha_dbf::write_row(uchar *buf)
     here, to pretend that the insert was successful.
   */
   ha_statistic_increment(&SSV::ha_write_count);
-  pthread_mutex_lock(&dbf_mutex);
+  mysql_mutex_lock(&dbf_mutex);
   // buf , table->s->rec_buff_length
   int length = table->s->rec_buff_length;
   long long pos;
@@ -469,7 +505,7 @@ int ha_dbf::write_row(uchar *buf)
   if(i==-1) pos = i;
   else number_records++;
   if(pos){}
-  pthread_mutex_unlock(&dbf_mutex);
+  mysql_mutex_unlock(&dbf_mutex);
   DBUG_RETURN(0);
 }
 
@@ -926,7 +962,7 @@ int ha_dbf::delete_table(const char *name)
   DBUG_ENTER("ha_dbf::delete_table");
   /* This is not implemented but we want someone to be able that it works. */
   char name_buff[FN_REFLEN];
-  pthread_mutex_lock(&dbf_mutex);
+  mysql_mutex_lock(&dbf_mutex);
   if(!(share=get_share(name,table)))
     DBUG_RETURN(1);
   if(data_file!=-1){
@@ -935,7 +971,7 @@ int ha_dbf::delete_table(const char *name)
   }
   char*path = fn_format(name_buff, name, "", DBE_EXT, MY_REPLACE_EXT | MY_UNPACK_FILENAME);
   my_delete(path,MYF(0));
-  pthread_mutex_unlock(&dbf_mutex);
+  mysql_mutex_unlock(&dbf_mutex);
   DBUG_RETURN(0);
 }
 
@@ -960,7 +996,7 @@ int ha_dbf::rename_table(const char *from, const char *to)
   char data_to[FN_REFLEN];
   if(!(share=get_share(from,table)))
     DBUG_RETURN(1);
-  pthread_mutex_lock(&dbf_mutex);
+  mysql_mutex_lock(&dbf_mutex);
   if(data_file!=-1){
     my_close(data_file,MYF(0));
     data_file=-1;
@@ -976,7 +1012,7 @@ int ha_dbf::rename_table(const char *from, const char *to)
   if(!flag){
     read_header();
   }
-  pthread_mutex_unlock(&dbf_mutex);
+  mysql_mutex_unlock(&dbf_mutex);
   my_delete(data_from,MYF(0));
   DBUG_RETURN(HA_ERR_WRONG_COMMAND);
 }

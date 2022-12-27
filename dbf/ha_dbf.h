@@ -51,7 +51,7 @@ class Dbf_share : public Handler_share {
 public:
   char *table_name;
   uint table_name_length,use_count;
-  pthread_mutex_t mutex;
+  mysql_mutex_t mutex;
   THR_LOCK lock;
   bool crashed;             /* Meta file is crashed */
   Dbf_share();
@@ -74,7 +74,6 @@ class ha_dbf: public handler
   THR_LOCK_DATA lock;      ///< MySQL lock
   Dbf_share *share;    ///< Shared lock info
   off_t current_position;  /* Current position in the file during a file scan */
-  Dbf_share *get_share(const char *table_name, TABLE *table); ///< Get the share
   File data_file; /* File handler for readers */
   int number_records; /* Number of records in the file */
   int number_del_records; /* Number of deleted records in the file */
