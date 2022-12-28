@@ -1014,7 +1014,7 @@ int ha_dbf::rename_table(const char *from, const char *to)
   }
   mysql_mutex_unlock(&dbf_mutex);
   my_delete(data_from,MYF(0));
-  DBUG_RETURN(HA_ERR_WRONG_COMMAND);
+  DBUG_RETURN(0);
 }
 
 /**
