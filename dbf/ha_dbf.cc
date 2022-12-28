@@ -559,7 +559,7 @@ int ha_dbf::update_row(const uchar *old_rec, uchar *new_rec)
 
 /**
   @brief
-  This will delete a row. buf will contain a copy of the row to be deleted.
+  This will delete a row. old_rec will contain a copy of the row to be deleted.
   The server will call this right after the current row has been called (from
   either a previous rnd_nexT() or index call).
   @details
@@ -574,10 +574,69 @@ int ha_dbf::update_row(const uchar *old_rec, uchar *new_rec)
   sql_acl.cc, sql_udf.cc, sql_delete.cc, sql_insert.cc and sql_select.cc
 */
 
-int ha_dbf::delete_row(const uchar *buf)
+int ha_dbf::delete_row(const uchar *old_rec)
 {
+    long long position;
+    int length = table->s->rec_buff_length;
+    int i =-1;
+    long long pos;
+    long long cur_pos;
+    uchar *cmp_rec;
+    uchar delected = 1;
+
     DBUG_ENTER("ha_dbf::delete_row");
-    DBUG_RETURN(HA_ERR_WRONG_COMMAND);
+    if(current_position>0)
+        position = current_position - (length + record_header_size);
+    else
+        position=0;
+    mysql_mutex_lock(&dbf_mutex);
+
+    if(position == 0)
+        position = header_size; //move past header
+    pos=position;
+    if(position==-1) //don't know where it is..., scan for it
+    {
+        cmp_rec = (uchar *) my_malloc(key_memory_dbf_share, length, MYF(MY_ZEROFILL | MY_WME));
+        pos = 0;
+
+        /*
+         * Note: my_seek() return pos if no errors or -1 if errors.
+        */
+        cur_pos = my_seek(data_file, header_size, MY_SEEK_SET, MYF(0));
+        /*
+         * Note: read_row() return current file pointer if no error or -1 if error.
+         */
+        while ((cur_pos != -1) && (pos != -1))
+        {
+            pos = readrow(cmp_rec, length, cur_pos);
+            if (memcmp(old_rec, cmp_rec, length) == 0)
+            {
+                number_records--;
+                number_del_records++;
+                pos=cur_pos;
+                cur_pos=-1;
+            }
+            else if (pos != -1)   //move ahead to next rec
+            {
+                cur_pos = cur_pos + length + record_header_size;
+            }
+            my_free(cmp_rec);
+        }
+    }
+    /*
+     * if position found or provided, write the row.
+     */
+    if(pos!=-1) {
+        /*
+         * write the deleted byte, the length of the row ,and the data at the current file pointer.
+         */
+        pos=my_seek(data_file, pos, MY_SEEK_SET, MYF(0));
+        i = my_write(data_file, &delected, sizeof(uchar), MYF(0));
+        i=(i>1)?0:i;
+    }
+
+    mysql_mutex_unlock(&dbf_mutex);
+    DBUG_RETURN(0);
 }
 
 /**
@@ -838,7 +897,14 @@ int ha_dbf::extra(enum ha_extra_function operation)
 int ha_dbf::delete_all_rows()
 {
     DBUG_ENTER("ha_dbf::delete_all_rows");
-    DBUG_RETURN(HA_ERR_WRONG_COMMAND);
+    mysql_mutex_lock(&dbf_mutex);
+    if(data_file!=-1)
+    {
+        my_chsize(data_file,0,0, MYF(MY_WME));
+        write_header();
+    }
+    mysql_mutex_unlock(&dbf_mutex);
+    DBUG_RETURN(0);
 }
 
 /**
