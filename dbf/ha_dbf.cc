@@ -962,9 +962,9 @@ int ha_dbf::delete_table(const char *name)
   DBUG_ENTER("ha_dbf::delete_table");
   /* This is not implemented but we want someone to be able that it works. */
   char name_buff[FN_REFLEN];
-  mysql_mutex_lock(&dbf_mutex);
   if(!(share=get_share(name,table)))
     DBUG_RETURN(1);
+  mysql_mutex_lock(&dbf_mutex);
   if(data_file!=-1){
     my_close(data_file,MYF(0));
     data_file=-1;
