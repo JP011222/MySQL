@@ -49,21 +49,16 @@
 */
 class Dbf_share : public Handler_share {
 public:
-  char *table_name;
-  uint table_name_length,use_count;
-  mysql_mutex_t mutex;
-  THR_LOCK lock;
-  bool crashed;             /* Meta file is crashed */
+  char *table_name;//表名
+  uint table_name_length,use_count; //表名长度 ， 使用次数
+  mysql_mutex_t mutex; // 共享锁
+  THR_LOCK lock; //锁
+  bool crashed; //判断文件是否崩溃
   Dbf_share();
   ~Dbf_share()
   {
     thr_lock_delete(&lock);
   }
-};
-
-struct dbf_set {
-  my_off_t begin;
-  my_off_t end;
 };
 
 /** @brief

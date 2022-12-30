@@ -91,17 +91,17 @@
 
 mysql_mutex_t dbf_mutex;
 
-static PSI_memory_key key_memory_dbf_share;
+static PSI_memory_key key_memory_dbf_share;//内存检测
 
-static PSI_mutex_key key_mutex_dbf, key_mutex_Dbf_share_mutex;
+static PSI_mutex_key key_mutex_dbf, key_mutex_Dbf_share_mutex;//两个锁，一个分配给dbf_mutex，一个分配给share->mutex
 
-static PSI_mutex_info all_dbf_mutexes[]=
+static PSI_mutex_info all_dbf_mutexes[]=//官方要求，要有info来注册
         {
                 { &key_mutex_dbf, "dbf", PSI_FLAG_GLOBAL},
                 { &key_mutex_Dbf_share_mutex, "Dbf_share::mutex", 0}
         };
 
-static PSI_memory_info all_dbf_memory[]=
+static PSI_memory_info all_dbf_memory[]=//官方要求，要有info来注册
         {
                 { &key_memory_dbf_share, "dbf_share", PSI_FLAG_GLOBAL}
         };
@@ -110,10 +110,10 @@ static void init_dbf_psi_keys(void)
 {
     const char* category= "dbf";
     int count;
-    count= array_elements(all_dbf_mutexes);
-    mysql_mutex_register(category, all_dbf_mutexes, count);
-    count= array_elements(all_dbf_memory);
-    mysql_memory_register(category, all_dbf_memory, count);
+    count= array_elements(all_dbf_mutexes); //用array_elements 函数来数有多少条信息
+    mysql_mutex_register(category, all_dbf_mutexes, count); //注册锁
+    count= array_elements(all_dbf_memory); 
+    mysql_memory_register(category, all_dbf_memory, count); //注册内存
 }
 
 static HASH dbf_open_tables;
@@ -121,7 +121,7 @@ static handler *dbf_create_handler(handlerton *hton,
                                    TABLE_SHARE *table,
                                    MEM_ROOT *mem_root);
 
-handlerton *dbf_hton;
+handlerton *dbf_hton; //handerton类型的指针
 
 /* Interface to mysqld, to check system tables supported by SE */
 static const char *dbf_system_database();
@@ -130,7 +130,7 @@ static bool dbf_is_supported_system_table(const char *db,
                                           bool is_sql_layer_system_table);
 
 
-
+//dbf_get_key也是由example模块给出。在my_mutex_init中使用
 static uchar* dbf_get_key(Dbf_share *share, size_t *length,
                           my_bool not_used MY_ATTRIBUTE((unused)))
 {
@@ -140,24 +140,27 @@ static uchar* dbf_get_key(Dbf_share *share, size_t *length,
 
 Dbf_share::Dbf_share()
 {
-    thr_lock_init(&lock);
+    thr_lock_init(&lock);//初始化锁
 }
 
 static int dbf_init_func(void *p)
 {
     DBUG_ENTER("dbf_init_func");
+    //初始化PSI类型
     init_dbf_psi_keys();
+    //初始化锁，将key_mutex_dbf赋给dbf_mutex
     mysql_mutex_init(key_mutex_dbf, &dbf_mutex, MY_MUTEX_INIT_FAST);
+    //初始化哈希表
     (void) my_hash_init(&dbf_open_tables,system_charset_info,32,0,0,
                         (my_hash_get_key) dbf_get_key,0,0,
                         key_memory_dbf_share);
 
-    dbf_hton = (handlerton *)p;
-    dbf_hton->state = SHOW_OPTION_YES;
-    dbf_hton->create = dbf_create_handler;
-    dbf_hton->flags = HTON_CAN_RECREATE;
-    dbf_hton->system_database = dbf_system_database;
-    dbf_hton->is_supported_system_table = dbf_is_supported_system_table;
+    dbf_hton = (handlerton *)p; //分配内存
+    dbf_hton->state = SHOW_OPTION_YES; //show设置为可以
+    dbf_hton->create = dbf_create_handler; // 这是handler类，具体是对dbf类进行创建。
+    dbf_hton->flags = HTON_CAN_RECREATE; //可以创建多个
+    dbf_hton->system_database = dbf_system_database; //指定数据库
+    dbf_hton->is_supported_system_table = dbf_is_supported_system_table; //支持系统表操作
     DBUG_RETURN(0);
 }
 
@@ -171,41 +174,44 @@ static int dbf_init_func(void *p)
 
 static Dbf_share *get_share(const char *table_name, TABLE *table)
 {
-    Dbf_share *tmp_share;
+    Dbf_share *tmp_share; //共享结构Dbf_share类
     char *tmp_name;
     uint length;
-    length=(uint)strlen(table_name);
+    length=(uint)strlen(table_name); //表名的长度
     DBUG_ENTER("ha_dbf::get_share()");
-    mysql_mutex_lock(&dbf_mutex);
+    mysql_mutex_lock(&dbf_mutex); //进行上锁
     /*
       If share is not present in the hash, create a new share and
       initialize its members.
     */
+    //查找共享结构是否已经创建，用my_hash_search来查找，没创建的话要进行初始化创建
     if (!(tmp_share=(Dbf_share*)my_hash_search(&dbf_open_tables,
                                                (uchar*) table_name,
                                                length)))
     {
+        //为tmp_share , tmp_name 分配长度为length+1的内存
         if (!my_multi_malloc(key_memory_dbf_share,
                              MYF(MY_WME | MY_ZEROFILL),
                              &tmp_share, sizeof(*tmp_share),
                              &tmp_name, length+1,
                              NullS))
         {
+            //若分配失败，解锁并返回NULL
             mysql_mutex_unlock(&dbf_mutex);
             return NULL;
         }
-        tmp_share->use_count=0;
-        tmp_share->table_name_length = length;
-        tmp_share->table_name=tmp_name;
+        tmp_share->use_count=0; //使用次数
+        tmp_share->table_name_length = length; //表名长度
+        tmp_share->table_name=tmp_name; //表名
         strcpy(tmp_share->table_name, table_name);
-        if (my_hash_insert(&dbf_open_tables, (uchar*) tmp_share))
+        if (my_hash_insert(&dbf_open_tables, (uchar*) tmp_share)) //write a hash-key to the hash-index，要是失败则goto err
             goto err;
-        thr_lock_init(&tmp_share->lock);
+        thr_lock_init(&tmp_share->lock); //初始化tmp_share->lock
         mysql_mutex_init(key_mutex_Dbf_share_mutex,
-                         &tmp_share->mutex, MY_MUTEX_INIT_FAST);
+                         &tmp_share->mutex, MY_MUTEX_INIT_FAST); //初始化tmp_share->mutex，赋成key_mutex_Dbf_share_mutex类型
     }
-    tmp_share->use_count++;
-    mysql_mutex_unlock(&dbf_mutex);
+    tmp_share->use_count++;//使用次数+1
+    mysql_mutex_unlock(&dbf_mutex);//解锁
     DBUG_RETURN(tmp_share);
     err:
     mysql_mutex_unlock(&dbf_mutex);
@@ -223,22 +229,22 @@ static handler *dbf_create_handler(handlerton *hton,
 
 ha_dbf::ha_dbf(handlerton *hton, TABLE_SHARE *table_arg)
         : handler(hton, table_arg),
-          current_position(0),
-          data_file(-1),
-          number_records(-1),
-          number_del_records(-1),
-          header_size(sizeof(bool)+sizeof(int)+sizeof(int)),
-          record_header_size(sizeof(uchar)+sizeof(int))
+          current_position(0), //当前位置
+          data_file(-1),//数据文件，初始化为-1
+          number_records(-1),//记录有多少条数据
+          number_del_records(-1), //记录删除了多少条
+          header_size(sizeof(bool)+sizeof(int)+sizeof(int)), //头部长度
+          record_header_size(sizeof(uchar)+sizeof(int)) //记录头部的长度
 {
 }
 
 int ha_dbf::write_header(){
     DBUG_ENTER("ha_dbf::write_header");
-    if(number_records!=-1){
-        my_seek(data_file,0l,MY_SEEK_SET,MYF(0));
-        my_write(data_file,(uchar*)&crashed,sizeof(bool),MYF(0));
-        my_write(data_file,(uchar*)&number_records,sizeof(int),MYF(0));
-        my_write(data_file,(uchar*)&number_del_records,sizeof(int),MYF(0));
+    if(number_records!=-1){ //要是没被写过，也就是说当前是第一次写
+        my_seek(data_file,0l,MY_SEEK_SET,MYF(0));//从0开始寻找文件位置
+        my_write(data_file,(uchar*)&crashed,sizeof(bool),MYF(0)); //向文件写入creashed
+        my_write(data_file,(uchar*)&number_records,sizeof(int),MYF(0)); //向文件写入number_records
+        my_write(data_file,(uchar*)&number_del_records,sizeof(int),MYF(0)); //向文件写入number_del_records
     }
     DBUG_RETURN(0);
 }
@@ -246,15 +252,15 @@ int ha_dbf::write_header(){
 int ha_dbf::read_header(){
     int len;
     DBUG_ENTER("ha_dbf::read_header");
-    if(number_records==-1){
-        my_seek(data_file,0L,MY_SEEK_SET,MYF(0));
-        my_read(data_file,(uchar*)&crashed,sizeof(bool),MYF(0));
-        my_read(data_file,(uchar*)&len,sizeof(int),MYF(0));
-        memcpy(&number_records,&len,sizeof(int));
-        my_read(data_file,(uchar*)&len,sizeof(int),MYF(0));
-        memcpy(&number_del_records,&len,sizeof(int));
+    if(number_records==-1){//要是没被读过，也就是说当前是第一次读
+        my_seek(data_file,0L,MY_SEEK_SET,MYF(0)); //从0开始寻找文件位置
+        my_read(data_file,(uchar*)&crashed,sizeof(bool),MYF(0)); //将文件中的uchar读取到creashed
+        my_read(data_file,(uchar*)&len,sizeof(int),MYF(0)); //将文件中的下一个uchar读取到len
+        memcpy(&number_records,&len,sizeof(int)); //number_records赋值成len
+        my_read(data_file,(uchar*)&len,sizeof(int),MYF(0)); // 将文件中的下一个uchar读取到len
+        memcpy(&number_del_records,&len,sizeof(int));//number_del_records赋值成len
     }else{
-        my_seek(data_file,header_size,MY_SEEK_SET,MYF(0));
+        my_seek(data_file,header_size,MY_SEEK_SET,MYF(0)); //否则只是定位文件，跳过头部信息，从header_size开始
     }
     DBUG_RETURN(0);
 }
@@ -262,9 +268,9 @@ int ha_dbf::read_header(){
 long long ha_dbf::cur_position(){
     long long pos;
     DBUG_ENTER("ha_dbf::cur_position");
-    pos = my_seek(data_file,0L,MY_SEEK_CUR,MYF(0));
+    pos = my_seek(data_file,0L,MY_SEEK_CUR,MYF(0));//从0开始寻找文件位置
     if(pos==0){
-        DBUG_RETURN(header_size);
+        DBUG_RETURN(header_size); //跳过头部信息部分
     }
     DBUG_RETURN(pos);
 }
@@ -276,15 +282,15 @@ int ha_dbf::readrow(uchar *buf,int length,long long position){
     uchar deleted = 2;
     DBUG_ENTER("ha_dbf::read_row");
     if(position<=0) position = header_size;
-    pos = my_seek(data_file, position, MY_SEEK_SET, MYF(0));
-    if(pos != -1L ){
-        i = my_read(data_file, &deleted, sizeof(uchar), MYF(0));
-        if(deleted == 0){
-            i = my_read(data_file,(uchar*)&rec_len,sizeof(int),MYF(0));
-            i = my_read(data_file, buf , (length < rec_len)?length:rec_len, MYF(0));
+    pos = my_seek(data_file, position, MY_SEEK_SET, MYF(0)); //从当前position定位文件
+    if(pos != -1L ){//定位到文件
+        i = my_read(data_file, &deleted, sizeof(uchar), MYF(0)); //读出uchar数据到deleted
+        if(deleted == 0){//要是delted为0证明读取成功
+            i = my_read(data_file,(uchar*)&rec_len,sizeof(int),MYF(0));//读出uchar数据到rec_len变量
+            i = my_read(data_file, buf , (length < rec_len)?length:rec_len, MYF(0)); //将rec_len和length进行比较，选择较小的一个进行buf数据读取
         }else if (i == 0){
             DBUG_RETURN(-1);
-        }else {
+        }else {//否则，读取位置变成当前位置加上数据长度再加上头部长度，再次进行读取。
             DBUG_RETURN(readrow(buf,length,cur_position()+length+(record_header_size-sizeof(uchar))));
         }
     }else DBUG_RETURN(-1);
@@ -308,13 +314,13 @@ int ha_dbf::readrow(uchar *buf,int length,long long position){
 */
 
 static const char *ha_dbf_exts[] = {
-        DBE_EXT,
-        DBI_EXT,
+        DBE_EXT,//数据文件名
+        DBI_EXT,//索引文件名
         NullS};
 
 const char **ha_dbf::bas_ext() const
 {
-    return ha_dbf_exts;
+    return ha_dbf_exts; //返回ha_dbf_exts数组
 }
 
 /*
@@ -390,17 +396,17 @@ int ha_dbf::open(const char *name, int mode, uint test_if_locked)
 {
     DBUG_ENTER("ha_dbf::open");
     char name_buff[FN_REFLEN];
-    if(!(share = get_share(name,table)))
+    if(!(share = get_share(name,table)))//获得共享结构
         DBUG_RETURN(1);
-    char *path = fn_format(name_buff,name,"",DBE_EXT,MY_REPLACE_EXT|MY_UNPACK_FILENAME);
-    data_file = my_open(path, O_RDWR | O_CREAT | O_BINARY | O_SHARE, MYF(0));
+    char *path = fn_format(name_buff,name,"",DBE_EXT,MY_REPLACE_EXT|MY_UNPACK_FILENAME); //获得文件名
+    data_file = my_open(path, O_RDWR | O_CREAT | O_BINARY | O_SHARE, MYF(0));//打开文件
     int flag = 0;
     if (data_file == -1)
         flag = 1;
     if(!flag){
-        read_header();
+        read_header(); //若打开文件成功，则读取文件头部信息
     }
-
+    //初始化锁
     thr_lock_data_init(&share->lock, &lock, NULL);
 
     DBUG_RETURN(0);
@@ -458,23 +464,25 @@ int ha_dbf::write_row(uchar *buf)
       probably need to do something with 'buf'. We report a success
       here, to pretend that the insert was successful.
     */
-    ha_statistic_increment(&SSV::ha_write_count);
-    mysql_mutex_lock(&dbf_mutex);
+    ha_statistic_increment(&SSV::ha_write_count);//进行write的系统统计
+    mysql_mutex_lock(&dbf_mutex);//上锁
     // buf , table->s->rec_buff_length
-    int length = table->s->rec_buff_length;
+    int length = table->s->rec_buff_length; //获取数据项buf的长度
     long long pos;
     int i;
     int len;
     uchar deleted = 0;
-    pos = my_seek(data_file, 0L, MY_SEEK_END, MYF(0));
-    i = my_write(data_file, &deleted, sizeof(uchar), MYF(0));
-    memcpy(&len,&length,sizeof(int));
-    i = my_write(data_file, (uchar*)&len,sizeof(int),MYF(0));
+    pos = my_seek(data_file, 0L, MY_SEEK_END, MYF(0)); //定位文件位置
+    //先书写头部信息
+    i = my_write(data_file, &deleted, sizeof(uchar), MYF(0)); //先写入deleted变量，用于readrow函数
+    memcpy(&len,&length,sizeof(int)); //len赋值成length
+    i = my_write(data_file, (uchar*)&len,sizeof(int),MYF(0)); //在写入len长度
+    //再书写数据
     i = my_write(data_file, buf, length, MYF(0));
     if(i==-1) pos = i;
-    else number_records++;
+    else number_records++; //写成功，记录数加1
     if(pos){}
-    mysql_mutex_unlock(&dbf_mutex);
+    mysql_mutex_unlock(&dbf_mutex);//解锁
     DBUG_RETURN(0);
 }
 
@@ -742,9 +750,9 @@ int ha_dbf::index_last(uchar *buf)
 int ha_dbf::rnd_init(bool scan)
 {
     DBUG_ENTER("ha_dbf::rnd_init");
-    current_position=0;
-    stats.records= 0;
-    ref_length = sizeof(long long);
+    current_position=0;//当前位置
+    stats.records= 0; //handler类中的记录个数变量
+    ref_length = sizeof(long long); //数据项长度
     DBUG_RETURN(0);
 }
 
@@ -770,12 +778,12 @@ int ha_dbf::rnd_next(uchar *buf)
 {
     int rc=-1;
     DBUG_ENTER("ha_dbf::rnd_next");
-    ha_statistic_increment(&SSV::ha_read_rnd_next_count);
+    ha_statistic_increment(&SSV::ha_read_rnd_next_count);//这条是用来进行统计分析rnd_next_count
     // buf table->s->rec_buff_length current_position
-    rc = readrow(buf, table->s->rec_buff_length,current_position);
-    if(rc!=-1) current_position = (off_t)cur_position();
-    else DBUG_RETURN(HA_ERR_END_OF_FILE);
-    stats.records++;
+    rc = readrow(buf, table->s->rec_buff_length,current_position); //调用readrow进行数据读取
+    if(rc!=-1) current_position = (off_t)cur_position(); //要是数据读取成功，那么调用cur_position给当前current_position进行更新
+    else DBUG_RETURN(HA_ERR_END_OF_FILE);//否则，返回已经到文件末尾。
+    stats.records++;//记录个数加1
     DBUG_RETURN(0);
 }
 
@@ -800,7 +808,7 @@ int ha_dbf::rnd_next(uchar *buf)
 void ha_dbf::position(const uchar *record)
 {
     DBUG_ENTER("ha_dbf::position");
-    my_store_ptr(ref, ref_length, current_position);
+    my_store_ptr(ref, ref_length, current_position);//存放指针
     DBUG_VOID_RETURN;
 }
 
@@ -818,10 +826,10 @@ void ha_dbf::position(const uchar *record)
 int ha_dbf::rnd_pos(uchar *buf, uchar *pos)
 {
     DBUG_ENTER("ha_dbf::rnd_pos");
-    ha_statistic_increment(&SSV::ha_read_rnd_next_count);
-    current_position= (off_t)my_get_ptr(pos,ref_length);
+    ha_statistic_increment(&SSV::ha_read_rnd_next_count);//先进行系统统计
+    current_position= (off_t)my_get_ptr(pos,ref_length);//引用变量和检索长度
     //buf , current_position , -1
-    readrow(buf, current_position, -1);
+    readrow(buf, current_position, -1);//再进行数据读取
     DBUG_RETURN(0);
 }
 
@@ -862,7 +870,7 @@ int ha_dbf::rnd_pos(uchar *buf, uchar *pos)
 int ha_dbf::info(uint flag)
 {
     DBUG_ENTER("ha_dbf::info");
-    if(stats.records<2) stats.records=2;
+    if(stats.records<2) stats.records=2;//欺骗优化器
     DBUG_RETURN(0);
 }
 
@@ -1012,16 +1020,16 @@ int ha_dbf::delete_table(const char *name)
     DBUG_ENTER("ha_dbf::delete_table");
     /* This is not implemented but we want someone to be able that it works. */
     char name_buff[FN_REFLEN];
-    if(!(share=get_share(name,table)))
+    if(!(share=get_share(name,table)))//获得共享结构
         DBUG_RETURN(1);
-    mysql_mutex_lock(&dbf_mutex);
+    mysql_mutex_lock(&dbf_mutex);//设置锁
     if(data_file!=-1){
-        my_close(data_file,MYF(0));
+        my_close(data_file,MYF(0));//先把文件关了
         data_file=-1;
     }
-    char*path = fn_format(name_buff, name, "", DBE_EXT, MY_REPLACE_EXT | MY_UNPACK_FILENAME);
-    my_delete(path,MYF(0));
-    mysql_mutex_unlock(&dbf_mutex);
+    char*path = fn_format(name_buff, name, "", DBE_EXT, MY_REPLACE_EXT | MY_UNPACK_FILENAME);//获得文件名
+    my_delete(path,MYF(0));//调用api删除文件
+    mysql_mutex_unlock(&dbf_mutex);//解锁
     DBUG_RETURN(0);
 }
 
@@ -1041,26 +1049,29 @@ int ha_dbf::rename_table(const char *from, const char *to)
     DBUG_ENTER("ha_dbf::rename_table ");
     char data_from[FN_REFLEN];
     char data_to[FN_REFLEN];
-    if(!(share=get_share(from,table)))
+    if(!(share=get_share(from,table)))//获得共享结构
         DBUG_RETURN(1);
-    mysql_mutex_lock(&dbf_mutex);
+    mysql_mutex_lock(&dbf_mutex);//上锁
     if(data_file!=-1){
-        my_close(data_file,MYF(0));
+        my_close(data_file,MYF(0)); //先关文件
         data_file=-1;
     }
-    my_copy(fn_format(data_from, from, "", DBE_EXT, MY_REPLACE_EXT | MY_UNPACK_FILENAME),
+    //对文件数据进行复制，调用api my_copy
+    my_copy(fn_format(data_from, from, "", DBE_EXT, MY_REPLACE_EXT | MY_UNPACK_FILENAME), 
             fn_format(data_to, to, "", DBE_EXT, MY_REPLACE_EXT | MY_UNPACK_FILENAME),
             MYF(0));
     int flag = 0;
+    //打开新文件
     data_file = my_open(data_to, O_RDWR | O_CREAT | O_BINARY | O_SHARE, MYF(0));
     if(data_file==-1){
         flag = 1;
     }
+    //读取新文件的头部信息
     if(!flag){
         read_header();
     }
-    mysql_mutex_unlock(&dbf_mutex);
-    my_delete(data_from,MYF(0));
+    mysql_mutex_unlock(&dbf_mutex);//解锁
+    my_delete(data_from,MYF(0));//删除掉旧文件
     DBUG_RETURN(0);
 }
 
@@ -1102,20 +1113,23 @@ int ha_dbf::create(const char *name, TABLE *table_arg,
 {
     char name_buff[FN_REFLEN];
     DBUG_ENTER("ha_dbf::create");
-    if(!(share=get_share(name,table)))
+    if(!(share=get_share(name,table))) //获得共享结构
         DBUG_RETURN(1);
-    char *path = fn_format(name_buff,name,"",DBE_EXT,MY_REPLACE_EXT|MY_UNPACK_FILENAME);
+    //用fn_format读取出文件名
+    char *path = fn_format(name_buff,name,"",DBE_EXT,MY_REPLACE_EXT|MY_UNPACK_FILENAME); 
+    //打开文件，使用api my_open 
     data_file = my_open(path, O_RDWR | O_CREAT | O_BINARY | O_SHARE, MYF(0));
     int flag = 0;
+    //要是打开文件失败，那么flag置1
     if (data_file == -1)
         flag = 1;
-    if(!flag) read_header();
-    number_records = 0;
-    number_del_records = 0;
-    crashed = false;
-    write_header();
-    if(flag) DBUG_RETURN(-1);
-    if(data_file!=-1){
+    if(!flag) read_header(); //flag不为1，说明打开文件成功，读取文件头部信息
+    number_records = 0;//初始化数量记录为0
+    number_del_records = 0;//初始化删除数量记录为0
+    crashed = false; //初始化崩溃参数为false
+    write_header();//写入头部信息
+    if(flag) DBUG_RETURN(-1); //要是flag=1，说明打开文件失败，返回-1
+    if(data_file!=-1){ //要是有文件打开了，那么创建过程的最后要把他关闭掉。
         my_close(data_file,MYF(0));
         data_file = -1;
     }
