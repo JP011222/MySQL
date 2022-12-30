@@ -509,29 +509,29 @@ int ha_dbf::update_row(const uchar *old_rec, uchar *new_rec)
     uchar deleted=0;
     int i=-1;
     if(position==0)
-        position=header_size; //move past header
+        position=header_size; //移动 header
     pos=position;
     /*
-        If position unknown,scan for the record by reading a row at a time until found.
+        如果位置未知，通过一次读取一行来扫描记录，直到找到为止。
     */
-    if(position==-1) //don't know where it is..., scan for it
+    if(position==-1) //如果位置未知的情况
     {
         cmp_rec = (uchar *) my_malloc(key_memory_dbf_share, length, MYF(MY_ZEROFILL | MY_WME));
         pos = 0;
 
         /*
-         * Note: my_seek() return pos if no errors or -1 if errors.
+         * Note: my_seek() 返回记录位置，出错返回-1
         */
         cur_pos = my_seek(data_file, header_size, MY_SEEK_SET, MYF(0));
         /*
-         * Note: read_row() return current file pointer if no error or -1 if error.
+         * Note: read_row() 返回当前文件指针，若出错返回-1
          */
         while ((cur_pos != -1) && (pos != -1)) {
             pos = readrow(cmp_rec, length, cur_pos);
             if (memcmp(old_rec, cmp_rec, length) == 0) {
-                pos = cur_pos;    //found
-                cur_pos = -1;     //stop loop
-            } else if (pos != -1)   //move ahead to next rec
+                pos = cur_pos;    //找到位置
+                cur_pos = -1;     //停止循环
+            } else if (pos != -1)   //移动到下条记录前
             {
                 cur_pos = cur_pos + length + record_header_size;
             }
@@ -539,12 +539,12 @@ int ha_dbf::update_row(const uchar *old_rec, uchar *new_rec)
         }
     }
     /*
-     * if position found or provided, write the row.
+     * 位置已知，修改行
      */
     if(pos!=-1)
     {
         /*
-         * write the deleted byte, the length of the row ,and the data at the current file pointer.
+         * 写入删除的字节、行的长度和当前文件指针处的数据。
          */
         my_seek(data_file,pos,MY_SEEK_SET,MYF(0));
         i = my_write(data_file,&deleted,sizeof(uchar), MYF(0));
@@ -594,17 +594,20 @@ int ha_dbf::delete_row(const uchar *old_rec)
     if(position == 0)
         position = header_size; //move past header
     pos=position;
-    if(position==-1) //don't know where it is..., scan for it
+    /*
+     * 如果位置未知，通过一次读取一行来扫描记录，直到找到为止。
+    */
+    if(position==-1) //如果位置未知的情况
     {
         cmp_rec = (uchar *) my_malloc(key_memory_dbf_share, length, MYF(MY_ZEROFILL | MY_WME));
         pos = 0;
 
         /*
-         * Note: my_seek() return pos if no errors or -1 if errors.
+         * Note: my_seek() 返回位置，若出错返回-1
         */
         cur_pos = my_seek(data_file, header_size, MY_SEEK_SET, MYF(0));
         /*
-         * Note: read_row() return current file pointer if no error or -1 if error.
+         * Note: read_row() return 返回当前文件指针
          */
         while ((cur_pos != -1) && (pos != -1))
         {
@@ -616,7 +619,7 @@ int ha_dbf::delete_row(const uchar *old_rec)
                 pos=cur_pos;
                 cur_pos=-1;
             }
-            else if (pos != -1)   //move ahead to next rec
+            else if (pos != -1)   //移动到下条记录前
             {
                 cur_pos = cur_pos + length + record_header_size;
             }
@@ -624,11 +627,11 @@ int ha_dbf::delete_row(const uchar *old_rec)
         }
     }
     /*
-     * if position found or provided, write the row.
+     * 位置已知，修改行
      */
     if(pos!=-1) {
         /*
-         * write the deleted byte, the length of the row ,and the data at the current file pointer.
+         * 写入删除的字节、行的长度和当前文件指针处的数据。
          */
         pos=my_seek(data_file, pos, MY_SEEK_SET, MYF(0));
         i = my_write(data_file, &delected, sizeof(uchar), MYF(0));
